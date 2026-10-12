@@ -1,0 +1,13 @@
+#!/bin/sh -e
+
+# tag
+TAG="$(git describe --abbrev=0 --tags 2>/dev/null || echo 'v0.0.0')"
+
+# version
+VER="$TAG-$(git rev-parse --short HEAD)"
+
+# `dirty` status, ignoring untracked files
+git status --porcelain | grep -q '^[^?]' && VER="$VER-dirty"
+
+# result
+echo "${VER#v}"

@@ -1,0 +1,176 @@
+#!/bin/bash
+
+set -eo pipefail
+
+FANOUT='./fanout'
+WORKDIR="$(mktemp -d)"
+
+# shellcheck disable=SC2064
+trap "rm -rf '$WORKDIR'" EXIT
+export WORKDIR
+
+die() {
+	echo >&2 "ERROR:" "$@"
+	exit 1
+}
+
+setup_test() {
+	rm -f "$WORKDIR"/*
+	echo >&2 "--> ${1:-${FUNCNAME[1]}}"
+}
+
+invoke_fanout() {
+	# shellcheck disable=SC2016
+	"$FANOUT" sh -c 'cat > "$WORKDIR/out.$FANOUT_ID"' < "$WORKDIR/in"
+# 	cat "$WORKDIR/in" | "$FANOUT" sh -c 'cat > "$WORKDIR/out.$FANOUT_ID"'
+}
+
+run_test() {
+	setup_test "$1"
+
+	# generate data
+	"$1" > "$WORKDIR/in"
+
+	# run
+	invoke_fanout
+
+	# validate result
+	i=0
+
+	while IFS= read -r line || [ -n "$line" ]
+	do
+		if [ -n "$line" ]
+		then
+			[ "$(< "$WORKDIR/out.$i")" = "$line" ] || die "$1: mismatch @ line $i"
+			i=$((i + 1))
+		fi
+	done < "$WORKDIR/in"
+
+	echo >&2 "OK ($i lines)"
+}
+
+CHUNK_SIZE="$(sed -E -n 's/#define[[:space:]]+CHUNK_SIZE[[:space:]]+([[:digit:]]+)$/\1/p' fanout.c)"
+[ -n "$CHUNK_SIZE" ] || die "CHUNK_SIZE is not set"
+
+# test cases
+chars='abcdefghijklmnopqrstuvwxyz'
+
+test_basic_function() {
+	echo -en "\naaa\nbbb\nccc"
+}
+
+test_big_strings() {
+	for ((i = 0 ; i < 10 ; i++ ))
+	do
+		head -c 1000000 /dev/zero | tr '\0' "${chars:i:1}"
+		echo
+	done
+}
+
+test_empty_input() {
+	setup_test
+
+	touch "$WORKDIR/in"
+	invoke_fanout
+
+	[ -f "$WORKDIR/out.0" ] && die "unexpected output"
+	echo >&2 "OK"
+}
+
+test_delim_empty_input() {
+	setup_test
+
+	echo -en "\n\n\n\n" > "$WORKDIR/in"
+	invoke_fanout
+
+	[ -f "$WORKDIR/out.0" ] && die "unexpected output"
+	echo >&2 "OK"
+}
+
+test_chunk-1() {
+	head -c $((CHUNK_SIZE - 1)) /dev/zero | tr '\0' 'a'
+}
+
+test_chunk() {
+	head -c "$CHUNK_SIZE" /dev/zero | tr '\0' 'b'
+}
+
+test_chunk+1() {
+	head -c $((CHUNK_SIZE + 1)) /dev/zero | tr '\0' 'c'
+}
+
+test_delim_chunk-1() {
+	head -c $((CHUNK_SIZE - 1)) /dev/zero | tr '\0' 'a'
+	echo
+}
+
+test_delim_chunk() {
+	head -c "$CHUNK_SIZE" /dev/zero | tr '\0' 'b'
+	echo
+}
+
+test_delim_chunk+1() {
+	head -c $((CHUNK_SIZE + 1)) /dev/zero | tr '\0' 'c'
+	echo
+}
+
+test_many_strings() {
+	sed '/^[[:space:]]*$/d' 'fanout.c'
+}
+
+test_exit_status() {
+	setup_test
+
+	echo -e "aaa\nbbb\nccc" > "$WORKDIR/in"
+
+	code=123
+
+	if "$FANOUT" sh -c "exit $code" < "$WORKDIR/in"
+	then
+		status=0
+	else
+		status=$?
+	fi
+
+	((status == code)) || die "unexpected exit status: $status instead of $code"
+	echo >&2 'OK'
+}
+
+test_signalling() {
+	setup_test
+
+	echo -e "aaa\nbbb\nccc" > "$WORKDIR/in"
+
+	"$FANOUT" sleep 5 < "$WORKDIR/in" &
+	FANID=$!
+
+	sleep 0.2
+
+	set +e
+	kill -HUP "$FANID" 2>/dev/null
+	wait "$FANID"
+	status=$?
+	set -e
+
+	if ((status == 129))	# 128 + SIGHUP
+	then
+		echo >&2 'OK'
+	else
+		die "unexpected error status: $status instead of 143"
+	fi
+}
+
+# run tests
+run_test test_basic_function
+run_test test_big_strings
+test_empty_input
+test_delim_empty_input
+run_test test_chunk-1
+run_test test_chunk
+run_test test_chunk+1
+run_test test_delim_chunk-1
+run_test test_delim_chunk
+run_test test_delim_chunk+1
+run_test test_many_strings
+test_exit_status
+test_signalling
