@@ -35,7 +35,7 @@ run_test() {
 	invoke_fanout
 
 	# validate result
-	i=0
+	local i=0
 
 	while IFS= read -r line || [ -n "$line" ]
 	do
@@ -49,17 +49,17 @@ run_test() {
 	echo >&2 "OK ($i lines)"
 }
 
-CHUNK_SIZE="$(sed -E -n 's/#define[[:space:]]+CHUNK_SIZE[[:space:]]+([[:digit:]]+)$/\1/p' fanout.c)"
+CHUNK_SIZE="$(sed -E -n 's/^#define[[:space:]]+CHUNK_SIZE[[:space:]]+([[:digit:]]+)$/\1/p' fanout.c)"
 [ -n "$CHUNK_SIZE" ] || die "CHUNK_SIZE is not set"
 
 # test cases
-chars='abcdefghijklmnopqrstuvwxyz'
-
 test_basic_function() {
 	echo -en "\naaa\nbbb\nccc"
 }
 
 test_big_strings() {
+	local chars='abcdefghijklmnopqrstuvwxyz'
+
 	for ((i = 0 ; i < 10 ; i++ ))
 	do
 		head -c 1000000 /dev/zero | tr '\0' "${chars:i:1}"
@@ -123,13 +123,13 @@ test_exit_status() {
 
 	echo -e "aaa\nbbb\nccc" > "$WORKDIR/in"
 
-	code=123
+	local code=123
 
 	if "$FANOUT" sh -c "exit $code" < "$WORKDIR/in"
 	then
-		status=0
+		die 'missing error status'
 	else
-		status=$?
+		local status=$?
 	fi
 
 	((status == code)) || die "unexpected exit status: $status instead of $code"
@@ -146,18 +146,20 @@ test_signalling() {
 
 	sleep 0.2
 
-	set +e
-	kill -HUP "$FANID" 2>/dev/null
-	wait "$FANID"
-	status=$?
-	set -e
+	kill -USR2 "$FANID"
 
-	if ((status == 129))	# 128 + SIGHUP
+	# 128 + SIGUSR2
+	local code=140
+
+	if wait "$FANID"
 	then
-		echo >&2 'OK'
+		die 'missing error status'
 	else
-		die "unexpected error status: $status instead of 143"
+		local status=$?
 	fi
+
+	((status == code)) || die "unexpected error status: $status instead of $code"
+	echo >&2 'OK'
 }
 
 # run tests
