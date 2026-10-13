@@ -46,6 +46,8 @@ run_test() {
 		fi
 	done < "$WORKDIR/in"
 
+	[ -f "$WORKDIR/out.$i" ] && die "unexpected line $i"
+
 	echo >&2 "OK ($i lines)"
 }
 
