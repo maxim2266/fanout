@@ -673,6 +673,80 @@ int parse_uint(unsigned* const p, const char* s) {
 	}
 }
 
+// read and set delimiter
+static
+void set_delim(const char* const s) {
+	const size_t n = strlen(s);
+
+	if (n == 1) {
+		delim = s[0];
+		return;
+	}
+
+	// https://www.gnu.org/software/bash/manual/bash.html#ANSI_002dC-Quoting-1
+	if (n > 0 && s[0] == '\\') {
+		switch (n) {
+			case 2:
+				switch (s[1]) {
+					case 'a':	delim = '\a';	return;
+					case 'b':	delim = '\b';	return;
+					case 'f':	delim = '\f';	return;
+					case 'n':	delim = '\n';	return;
+					case 'r':	delim = '\r';	return;
+					case 't':	delim = '\t';	return;
+					case 'v':	delim = '\v';	return;
+					case '\\':	delim = '\\';	return;
+					case '\'':	delim = '\'';	return;
+					case '"':	delim = '"';	return;
+					case '?':	delim = '?';	return;
+
+					case '0' ... '7':
+						delim = s[1] - '0';
+						return;
+				}
+
+				break;
+
+			case 3:
+			case 4:
+				delim = 0;
+
+				if (s[1] == 'x') {	// hex
+					for (const char* p = s + 2; ; ++p) {
+						switch (*p) {
+							case 0:
+								return;
+							case '0' ... '9':
+								delim = (delim << 4) + (*p - '0');
+								continue;
+							case 'a' ... 'f':
+								delim = (delim << 4) + (*p - 'a' + 10);
+								continue;
+							case 'A' ... 'F':
+								delim = (delim << 4) + (*p - 'A' + 10);
+								continue;
+						}
+
+						break; // loop
+					}
+
+				} else {	// octal
+					const char* p = s + 1;
+
+					while (*p >= '0' && *p <= '7')
+						delim = (delim << 3) + (*p++ - '0');
+
+					if (*p == 0)
+						return;
+				}
+
+				break;
+		}
+	}
+
+	die("invalid delimiter: `%s`", s);
+}
+
 // argument parsing and validation
 static
 char** parse_args(int argc, char** argv) {
@@ -730,30 +804,8 @@ char** parse_args(int argc, char** argv) {
 
 			case 'd':
 				// delimiter
-				switch (strlen(optarg)) {
-					case 1:
-						delim = optarg[0];
-						continue;
-
-					case 2:
-						if (optarg[0] == '\\') {
-							switch (optarg[1]) {
-								case 'n':
-									delim = '\n';
-									continue;
-
-								case 't':
-									delim = '\t';
-									continue;
-
-								case '0':
-									delim = 0;
-									continue;
-							}
-						}
-				}
-
-				die("invalid delimiter: `%s`", optarg);
+				set_delim(optarg);
+				break;
 
 			case ':':
 				die("missing argument for option `-%c`", optopt);
