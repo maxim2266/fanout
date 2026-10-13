@@ -256,7 +256,7 @@ void install_signal_handlers(void) {
 
 static
 struct reader {
-	unsigned nb, pos;
+	size_t nb, pos;
 	int status;
 	uint8_t arena[CHUNK_SIZE];
 } reader = { 0 };
@@ -273,34 +273,31 @@ void read_chunk(void) {
 	while ((n = read(STDIN_FILENO, reader.arena, CHUNK_SIZE)) < 0 && errno == EINTR);
 
 	if (n > 0)
-		reader.nb = (unsigned)n;
-	else if (n < 0)
-		reader.status = errno;
+		reader.nb = (size_t)n;
 	else
-		reader.status = -1;
+		reader.status = (n < 0) ? errno : -1;
 }
 
 struct buffer {
-	unsigned len, cap;
+	size_t len, cap;
 	uint8_t* ptr;
 };
 
 static
-int append_bytes(struct buffer* const buff, const uint8_t* p, const unsigned n) {
-	unsigned len;
+int append_bytes(struct buffer* const buff, const uint8_t* const p, const size_t n) {
+	size_t len;
 
-	if (__builtin_uadd_overflow(buff->len, n, &len))
+	if (__builtin_add_overflow(buff->len, n, &len))
 		return E2BIG;
 
-	if (len >= MAX_LINE_SIZE)
+	if (len > MAX_LINE_SIZE)
 		return ENOBUFS;
 
 	if (len > buff->cap) {
-		unsigned cap = buff->cap ? (2 * buff->cap) : CHUNK_SIZE;
+		size_t cap = buff->cap ? (2 * buff->cap) : CHUNK_SIZE;
 
-		while (len >= cap)
-			if ((cap *= 2) > MAX_LINE_SIZE)
-				return ENOBUFS;
+		while (len > cap)
+			cap *= 2;
 
 		buff->cap = cap;
 		buff->ptr = realloc(buff->ptr, cap);
@@ -344,7 +341,7 @@ int next_line(struct buffer* const buff) {
 		while (s < end && *s == (uint8_t)delim)
 			++s;
 
-		reader.pos = (unsigned)(s - reader.arena);
+		reader.pos = (size_t)(s - reader.arena);
 
 		if (s < end) {
 			// find next separator
@@ -355,7 +352,7 @@ int next_line(struct buffer* const buff) {
 				return reader.status;
 
 			// see if we are done
-			if ((reader.pos += (unsigned)(end - s)) < reader.nb)
+			if ((reader.pos += (size_t)(end - s)) < reader.nb)
 				return 0;
 		}
 	}
