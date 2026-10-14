@@ -90,7 +90,7 @@ unsigned log_level = 0u;	// 0 - errors only, 1 - errors and warnings, > 1 - all
 
 // state variables --------------------------------------------------------------------------------
 static
-int delim = '\n', term_signal = SIGTERM;
+int delim = '\n';
 
 static
 volatile int exit_code = 0;
@@ -109,7 +109,7 @@ uint64_t job_id = 0;
 
 // signals ----------------------------------------------------------------------------------------
 static
-sigset_t orig_sig_mask, blocked_sig_mask;
+sigset_t orig_sig_mask, blocked_sig_mask, term_sig_mask;
 
 static inline
 void sig_block(void) {
@@ -123,12 +123,15 @@ void sig_unblock(void) {
 
 static
 void init_signal_masks(void) {
+	// terminating signals
+	sigemptyset(&term_sig_mask);
+
 	// save existing mask
 	if (sigprocmask(0, NULL, &orig_sig_mask))
 		die_errno("cannot read signal mask");
 
-	sigdelset(&orig_sig_mask, term_signal);
 	sigdelset(&orig_sig_mask, SIGCHLD);
+	sigdelset(&orig_sig_mask, SIGTERM);
 
 	// blocked signal mask
 	blocked_sig_mask = orig_sig_mask;
@@ -160,8 +163,8 @@ void forward_signal(const int sig) {
 	for (unsigned i = 0; i < num_jobs; ++i)
 		kill(-child_procs[i], sig);
 
-	if (sig == term_signal && exit_code == 0)
-		exit_code = 128 + term_signal;
+	if (sigismember(&term_sig_mask, sig) > 0 && exit_code == 0)
+		exit_code = 128 + sig;
 
 	errno = e;
 }
@@ -447,7 +450,7 @@ void run_job(char** cmd, const struct buffer* const str) {
 
 		if (n < 0) {
 			SV_ERR_ERRNO("writing job input");
-			kill(pid, term_signal);
+			kill(pid, SIGTERM);
 			break;
 		}
 
@@ -456,7 +459,7 @@ void run_job(char** cmd, const struct buffer* const str) {
 
 	if (close(pfd[1]) < 0 && n >= 0) {
 		SV_ERR_ERRNO("writing job input");
-		kill(pid, term_signal);
+		kill(pid, SIGTERM);
 		n = (ssize_t)-1;
 	}
 
@@ -585,8 +588,6 @@ void run(char** cmd) {
 // setup ------------------------------------------------------------------------------------------
 static
 void setup(void) {
-	init_signal_masks();
-
 	// make STDERR line-buffered
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
@@ -620,7 +621,9 @@ const char usage_string[] =
 "Options:\n"
 "  -d CHAR    Split input on CHAR (default: newline).\n"
 "  -n NUM     Run no more than NUM jobs in parallel (default: number of CPUs).\n"
-"  -t SIG     Terminating signal (default: SIGTERM). Stops further job creation.\n"
+"  -t SIG     Terminating signal - stops further job creation irrespective of any\n"
+"             job exit status; may be given more than once.\n"
+"             Valid signals are: SIGINT SIGTERM SIGQUIT SIGHUP SIGUSR1 SIGUSR2.\n"
 "  -v         Increase verbosity; may be given more than once.\n"
 "  -h,--help  Display this help and exit.\n"
 "\n"
@@ -772,17 +775,19 @@ char** parse_args(int argc, char** argv) {
 							  ? optarg + 3
 							  : optarg;
 
-				term_signal = (strcmp(s, "INT") == 0)	? SIGINT
-							: (strcmp(s, "TERM") == 0)	? SIGTERM
-							: (strcmp(s, "QUIT") == 0)	? SIGQUIT
-							: (strcmp(s, "HUP") == 0)	? SIGHUP
-							: (strcmp(s, "USR1") == 0)	? SIGUSR1
-							: (strcmp(s, "USR2") == 0)	? SIGUSR2
-							: 0;
+				const int sig = (strcmp(s, "INT") == 0)  ? SIGINT
+							  : (strcmp(s, "TERM") == 0) ? SIGTERM
+							  : (strcmp(s, "QUIT") == 0) ? SIGQUIT
+							  : (strcmp(s, "HUP") == 0)  ? SIGHUP
+							  : (strcmp(s, "USR1") == 0) ? SIGUSR1
+							  : (strcmp(s, "USR2") == 0) ? SIGUSR2
+							  : 0;
 
-				if (term_signal == 0)
+				if (sig == 0)
 					die("unrecognised signal name: `%s`", optarg);
 
+				sigaddset(&term_sig_mask, sig);
+				sigdelset(&orig_sig_mask, sig);
 				break;
 			}
 
@@ -823,6 +828,8 @@ char** parse_args(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+	init_signal_masks();
+
 	char** const cmd = parse_args(argc, argv);
 
 	if (isatty(STDIN_FILENO))
