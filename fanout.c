@@ -42,6 +42,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <err.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 
 // macro definitions ------------------------------------------------------------------------------
@@ -613,9 +614,9 @@ const char usage_string[] =
 "Usage:\n"
 "  fanout [OPTIONS] CMD [ARGS...]\n"
 "\n"
-"Read lines from STDIN, and for each input line start a job running the given\n"
-"command, with the line (excluding delimiter) written to the job's STDIN. The\n"
-"command is looked up in PATH. The program waits for all jobs to complete while\n"
+"Read lines from STDIN or a file, and for each input line start a job running\n"
+"the given command, with the line (excluding delimiter) written to the job's STDIN.\n"
+"The command is looked up in PATH. The program waits for all jobs to complete while\n"
 "forwarding signals (SIGTERM, SIGINT, ...) to the running jobs.\n"
 "\n"
 "Options:\n"
@@ -623,12 +624,13 @@ const char usage_string[] =
 "  -n NUM     Run no more than NUM jobs in parallel (default: number of CPUs).\n"
 "  -t SIG     Terminating signal - stops further job creation irrespective of any\n"
 "             job exit status; may be given more than once.\n"
-"             Valid signals are: SIGINT SIGTERM SIGQUIT SIGHUP SIGUSR1 SIGUSR2.\n"
+"             SIG is any of SIGINT, SIGTERM, SIGQUIT, SIGHUP, SIGUSR1, SIGUSR2.\n"
+"  -i FILE    Read input from FILE instead of STDIN.\n"
 "  -v         Increase verbosity; may be given more than once.\n"
 "  -h,--help  Display this help and exit.\n"
 "\n"
 "Exit status: 0 if all jobs succeeded; otherwise the first non-zero job status,\n"
-"or 128 + signal if terminated by a signal.\n"
+"or (128 + signal) if terminated by a signal.\n"
 "\n"
 "Version: " XSTR(VER) "\n";
 
@@ -756,9 +758,10 @@ char** parse_args(int argc, char** argv) {
 	if (argc > 1 && strcmp(argv[1], "--help") == 0)
 		usage_exit();
 
+	const char* fname = NULL;
 	int c;
 
-	while ((c = getopt(argc, argv, "+:hvt:n:d:")) != -1) {
+	while ((c = getopt(argc, argv, "+:hvt:n:d:i:")) != -1) {
 		switch (c) {
 			case 'h':
 				// help
@@ -812,6 +815,14 @@ char** parse_args(int argc, char** argv) {
 				set_delim(optarg);
 				break;
 
+			case 'i':
+				// input file
+				if (fname)
+					die("can only process one input file");
+
+				fname = optarg;
+				break;
+
 			case ':':
 				die("missing argument for option `-%c`", optopt);
 
@@ -824,6 +835,23 @@ char** parse_args(int argc, char** argv) {
 	if (optind >= argc)
 		die("missing command");
 
+	// redirect input if required
+	if (fname) {
+		const int fd = open(fname, O_RDONLY | O_NOCTTY);
+
+		if (fd < 0)
+			die_errno("cannot open input file \"%s\"", fname);
+
+		if (dup2(fd, STDIN_FILENO) < 0)
+			die_errno("cannot redirect input");
+
+		close(fd);
+	}
+
+	if (isatty(STDIN_FILENO))
+		die("this program is not very useful when its input comes from terminal");
+
+	// the rest is the command
 	return argv + optind;
 }
 
@@ -831,9 +859,6 @@ int main(int argc, char** argv) {
 	init_signal_masks();
 
 	char** const cmd = parse_args(argc, argv);
-
-	if (isatty(STDIN_FILENO))
-		die("this program is not very useful when its input comes from terminal");
 
 	setup();
 	run(cmd);

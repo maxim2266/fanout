@@ -21,7 +21,7 @@ setup_test() {
 
 invoke_fanout() {
 	# shellcheck disable=SC2016
-	"$FANOUT" sh -c 'cat > "$WORKDIR/out.$FANOUT_ID"' < "$WORKDIR/in"
+	"$FANOUT" -i "$WORKDIR/in" sh -c 'cat > "$WORKDIR/out.$FANOUT_ID"'
 # 	cat "$WORKDIR/in" | "$FANOUT" sh -c 'cat > "$WORKDIR/out.$FANOUT_ID"'
 }
 
