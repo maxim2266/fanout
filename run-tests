@@ -164,6 +164,19 @@ test_signalling() {
 	echo >&2 'OK'
 }
 
+test_slow_input() {
+	setup_test
+
+	(echo -en 'aaa' && sleep 0.1 && echo -en '\nbbb' && sleep 0.1 && echo -en '\nccc')	\
+		| "$FANOUT" sh -c 'cat > "$WORKDIR/out.$FANOUT_ID"'
+
+	[ "$(< "$WORKDIR/out.0")" = 'aaa' ] || die "mismatch @ line 0"
+	[ "$(< "$WORKDIR/out.1")" = 'bbb' ] || die "mismatch @ line 1"
+	[ "$(< "$WORKDIR/out.2")" = 'ccc' ] || die "mismatch @ line 2"
+
+	echo >&2 'OK'
+}
+
 # run tests
 run_test test_basic_function
 run_test test_big_strings
@@ -178,3 +191,4 @@ run_test test_delim_chunk+1
 run_test test_many_strings
 test_exit_status
 test_signalling
+test_slow_input
